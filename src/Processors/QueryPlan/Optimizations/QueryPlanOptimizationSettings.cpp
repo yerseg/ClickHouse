@@ -17,6 +17,8 @@ QueryPlanOptimizationSettings QueryPlanOptimizationSettings::fromSettings(const 
     settings.remove_redundant_sorting = from.query_plan_remove_redundant_sorting;
     settings.aggregate_partitions_independently = from.allow_aggregate_partitions_independently;
     settings.remove_redundant_distinct = from.query_plan_remove_redundant_distinct;
+    settings.max_rows_in_set_to_optimize_join = from.max_rows_in_set_to_optimize_join;
+
     return settings;
 }
 
