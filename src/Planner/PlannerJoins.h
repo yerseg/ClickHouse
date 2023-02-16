@@ -73,6 +73,12 @@ public:
         filter_condition_nodes.push_back(condition_node);
     }
 
+    /// Add condition involving both tables
+    void addMixedCondition(const ActionsDAG::Node * condition_node)
+    {
+        mixed_condition_nodes.push_back(condition_node);
+    }
+
     /// Get left key nodes
     const ActionsDAG::NodeRawConstPtrs & getLeftKeyNodes() const
     {
@@ -133,6 +139,18 @@ public:
         return right_filter_condition_nodes;
     }
 
+    /// Get conditions from JOIN ON that involve both tables
+    const ActionsDAG::NodeRawConstPtrs & getMixedFilterConditionNodes() const
+    {
+        return mixed_condition_nodes;
+    }
+
+    /// Get conditions from JOIN ON that involve both tables
+    ActionsDAG::NodeRawConstPtrs & getMixedFilterConditionNodes()
+    {
+        return mixed_condition_nodes;
+    }
+
     /// Dump clause into buffer
     void dump(WriteBuffer & buffer) const;
 
@@ -147,6 +165,8 @@ private:
 
     ActionsDAG::NodeRawConstPtrs left_filter_condition_nodes;
     ActionsDAG::NodeRawConstPtrs right_filter_condition_nodes;
+    /// Conditions from JOIN ON that involves both tables
+    ActionsDAG::NodeRawConstPtrs mixed_condition_nodes;
 };
 
 using JoinClauses = std::vector<JoinClause>;
@@ -161,6 +181,8 @@ struct JoinClausesAndActions
     ActionsDAGPtr left_join_expressions_actions;
     /// Right join expressions actions
     ActionsDAGPtr right_join_expressions_actions;
+
+    ActionsDAGPtr both_join_expressions_actions;
 };
 
 /** Calculate join clauses and actions for JOIN ON section.

@@ -238,6 +238,7 @@ public:
 #endif
 
     ActionsDAGPtr clone() const;
+    static ActionsDAGPtr cloneNode(const ActionsDAG::Node * node);
 
     /// Execute actions for header. Input block must have empty columns.
     /// Result should be equal to the execution of ExpressionActions built from this DAG.

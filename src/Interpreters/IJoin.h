@@ -8,6 +8,7 @@
 #include <Columns/IColumn.h>
 #include <Common/Exception.h>
 #include <Common/logger_useful.h>
+#include <Interpreters/ExpressionActions.h>
 
 namespace DB
 {
@@ -22,6 +23,7 @@ using IBlocksStreamPtr = std::shared_ptr<IBlocksStream>;
 
 class IJoin;
 using JoinPtr = std::shared_ptr<IJoin>;
+
 
 enum class JoinPipelineType
 {
@@ -95,6 +97,11 @@ public:
 
     virtual IBlocksStreamPtr
         getNonJoinedBlocks(const Block & left_sample_block, const Block & result_sample_block, UInt64 max_block_size) const = 0;
+
+    virtual void addMixedFilterCondition(ExpressionActionsPtr /* additional_filter_expression_actions */)
+    {
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Mixed conditions in ON clause are not supported for this join");
+    }
 
 private:
     Block totals;

@@ -367,6 +367,8 @@ public:
 
     void debugKeys() const;
 
+    void addMixedFilterCondition(ExpressionActionsPtr additional_filter_expression_actions_) override;
+
 private:
     template<bool> friend class NotJoinedHash;
 
@@ -403,6 +405,8 @@ private:
     Block required_right_keys;
     /// Left table column names that are sources for required_right_keys columns
     std::vector<String> required_right_keys_sources;
+
+    ExpressionActionsPtr additional_filter_expression_actions = nullptr;
 
     Poco::Logger * log;
 
