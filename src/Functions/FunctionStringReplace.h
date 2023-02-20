@@ -13,7 +13,6 @@ namespace DB
 namespace ErrorCodes
 {
     extern const int ILLEGAL_COLUMN;
-    extern const int ARGUMENT_OUT_OF_BOUND;
     extern const int ILLEGAL_TYPE_OF_ARGUMENT;
 }
 
@@ -32,7 +31,7 @@ public:
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return true; }
 
     bool useDefaultImplementationForConstants() const override { return true; }
-    ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {1, 2}; }
+    ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {}; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
     {
@@ -42,13 +41,13 @@ public:
                 "Illegal type {} of first argument of function {}",
                 arguments[0]->getName(), getName());
 
-        if (!isStringOrFixedString(arguments[1]))
+        if (!isString(arguments[1]))
             throw Exception(
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
                 "Illegal type {} of second argument of function {}",
                 arguments[1]->getName(), getName());
 
-        if (!isStringOrFixedString(arguments[2]))
+        if (!isString(arguments[2]))
             throw Exception(
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
                 "Illegal type {} of third argument of function {}",
@@ -59,38 +58,64 @@ public:
 
     ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr &, size_t /*input_rows_count*/) const override
     {
-        const ColumnPtr column_src = arguments[0].column;
+        const ColumnPtr column_haystack = arguments[0].column;
         const ColumnPtr column_needle = arguments[1].column;
         const ColumnPtr column_replacement = arguments[2].column;
 
-        if (!isColumnConst(*column_needle) || !isColumnConst(*column_replacement))
-            throw Exception(
-                ErrorCodes::ILLEGAL_COLUMN,
-                "2nd and 3rd arguments of function {} must be constants.",
-                getName());
+        const ColumnString * col_haystack = checkAndGetColumn<ColumnString>(column_haystack.get());
+        const ColumnFixedString * col_haystack_fixed = checkAndGetColumn<ColumnFixedString>(column_haystack.get());
 
-        const IColumn * c1 = arguments[1].column.get();
-        const IColumn * c2 = arguments[2].column.get();
-        const ColumnConst * c1_const = typeid_cast<const ColumnConst *>(c1);
-        const ColumnConst * c2_const = typeid_cast<const ColumnConst *>(c2);
-        String needle = c1_const->getValue<String>();
-        String replacement = c2_const->getValue<String>();
+        const ColumnConst * col_needle_const = typeid_cast<const ColumnConst *>(column_needle.get());
+        const ColumnConst * col_replacement_const = typeid_cast<const ColumnConst *>(column_replacement.get());
 
-        if (needle.empty())
-            throw Exception(
-                ErrorCodes::ARGUMENT_OUT_OF_BOUND,
-                "Length of the second argument of function replace must be greater than 0.");
+        const ColumnString * col_needle_vector = checkAndGetColumn<ColumnString>(column_needle.get());
+        const ColumnString * col_replacement_vector = checkAndGetColumn<ColumnString>(column_replacement.get());
 
-        if (const ColumnString * col = checkAndGetColumn<ColumnString>(column_src.get()))
+        auto col_res = ColumnString::create();
+
+        if (col_haystack && col_needle_const && col_replacement_const)
         {
-            auto col_res = ColumnString::create();
-            Impl::vector(col->getChars(), col->getOffsets(), needle, replacement, col_res->getChars(), col_res->getOffsets());
+            Impl::vectorConstantConstant(
+                col_haystack->getChars(), col_haystack->getOffsets(),
+                col_needle_const->getValue<String>(),
+                col_replacement_const->getValue<String>(),
+                col_res->getChars(), col_res->getOffsets());
             return col_res;
         }
-        else if (const ColumnFixedString * col_fixed = checkAndGetColumn<ColumnFixedString>(column_src.get()))
+        else if (col_haystack && col_needle_vector && col_replacement_const)
         {
-            auto col_res = ColumnString::create();
-            Impl::vectorFixed(col_fixed->getChars(), col_fixed->getN(), needle, replacement, col_res->getChars(), col_res->getOffsets());
+            Impl::vectorVectorConstant(
+                col_haystack->getChars(), col_haystack->getOffsets(),
+                col_needle_vector->getChars(), col_needle_vector->getOffsets(),
+                col_replacement_const->getValue<String>(),
+                col_res->getChars(), col_res->getOffsets());
+            return col_res;
+        }
+        else if (col_haystack && col_needle_const && col_replacement_vector)
+        {
+            Impl::vectorConstantVector(
+                col_haystack->getChars(), col_haystack->getOffsets(),
+                col_needle_const->getValue<String>(),
+                col_replacement_vector->getChars(), col_replacement_vector->getOffsets(),
+                col_res->getChars(), col_res->getOffsets());
+            return col_res;
+        }
+        else if (col_haystack && col_needle_vector && col_replacement_vector)
+        {
+            Impl::vectorVectorVector(
+                col_haystack->getChars(), col_haystack->getOffsets(),
+                col_needle_vector->getChars(), col_needle_vector->getOffsets(),
+                col_replacement_vector->getChars(), col_replacement_vector->getOffsets(),
+                col_res->getChars(), col_res->getOffsets());
+            return col_res;
+        }
+        else if (col_haystack_fixed && col_needle_const && col_replacement_const)
+        {
+            Impl::vectorFixedConstantConstant(
+                col_haystack_fixed->getChars(), col_haystack_fixed->getN(),
+                col_needle_const->getValue<String>(),
+                col_replacement_const->getValue<String>(),
+                col_res->getChars(), col_res->getOffsets());
             return col_res;
         }
         else

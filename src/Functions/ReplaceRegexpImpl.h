@@ -13,7 +13,9 @@ namespace DB
 
 namespace ErrorCodes
 {
+    extern const int ARGUMENT_OUT_OF_BOUND;
     extern const int BAD_ARGUMENTS;
+    extern const int ILLEGAL_COLUMN;
 }
 
 struct ReplaceRegexpTraits
@@ -28,9 +30,11 @@ struct ReplaceRegexpTraits
 /** Replace all matches of regexp 'needle' to string 'replacement'. 'needle' and 'replacement' are constants.
   * 'replacement' can contain substitutions, for example: '\2-\3-\1'
   */
-template <ReplaceRegexpTraits::Replace replace>
+template <typename Name, ReplaceRegexpTraits::Replace replace>
 struct ReplaceRegexpImpl
 {
+    static constexpr auto name = Name::name;
+
     struct Instruction
     {
         /// If not negative, perform substitution of n-th subpattern from the regexp match.
@@ -162,18 +166,21 @@ struct ReplaceRegexpImpl
         ++res_offset;
     }
 
-    static void vector(
-        const ColumnString::Chars & data,
-        const ColumnString::Offsets & offsets,
+    static void vectorConstantConstant(
+        const ColumnString::Chars & haystack_data,
+        const ColumnString::Offsets & haystack_offset,
         const String & needle,
         const String & replacement,
         ColumnString::Chars & res_data,
         ColumnString::Offsets & res_offsets)
     {
+        if (needle.empty())
+            throw Exception(ErrorCodes::ARGUMENT_OUT_OF_BOUND, "Length of the pattern argument in function {} must be greater than 0.", name);
+
         ColumnString::Offset res_offset = 0;
-        res_data.reserve(data.size());
-        size_t size = offsets.size();
-        res_offsets.resize(size);
+        res_data.reserve(haystack_data.size());
+        size_t haystack_size = haystack_offset.size();
+        res_offsets.resize(haystack_size);
 
         re2_st::RE2::Options regexp_options;
         /// Don't write error messages to stderr.
@@ -192,29 +199,50 @@ struct ReplaceRegexpImpl
         Instructions instructions = createInstructions(replacement, num_captures);
 
         /// Cannot perform search for whole columns. Will process each string separately.
-        for (size_t i = 0; i < size; ++i)
+        for (size_t i = 0; i < haystack_size; ++i)
         {
-            size_t from = i > 0 ? offsets[i - 1] : 0;
-            const char * haystack_data = reinterpret_cast<const char *>(data.data() + from);
-            const size_t haystack_length = static_cast<unsigned>(offsets[i] - from - 1);
+            size_t from = i > 0 ? haystack_offset[i - 1] : 0;
+            const char * hs_data = reinterpret_cast<const char *>(haystack_data.data() + from);
+            const size_t hs_length = static_cast<unsigned>(haystack_offset[i] - from - 1);
 
-            processString(haystack_data, haystack_length, res_data, res_offset, searcher, num_captures, instructions);
+            processString(hs_data, hs_length, res_data, res_offset, searcher, num_captures, instructions);
             res_offsets[i] = res_offset;
         }
     }
 
-    static void vectorFixed(
-        const ColumnString::Chars & data,
+    template <typename... Args>
+    static void vectorVectorConstant(Args && ...)
+    {
+        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Function '{}' doesn't support non-constant pattern arguments", name);
+    }
+
+    template <typename... Args>
+    static void vectorConstantVector(Args && ...)
+    {
+        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Function '{}' doesn't support non-constant replacement arguments", name);
+    }
+
+    template <typename... Args>
+    static void vectorVectorVector(Args && ...)
+    {
+        throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Function '{}' doesn't support non-constant pattern or replacement arguments", name);
+    }
+
+    static void vectorFixedConstantConstant(
+        const ColumnString::Chars & haystack_data,
         size_t n,
         const String & needle,
         const String & replacement,
         ColumnString::Chars & res_data,
         ColumnString::Offsets & res_offsets)
     {
+        if (needle.empty())
+            throw Exception(ErrorCodes::ARGUMENT_OUT_OF_BOUND, "Length of the pattern argument in function {} must be greater than 0.", name);
+
         ColumnString::Offset res_offset = 0;
-        size_t size = data.size() / n;
-        res_data.reserve(data.size());
-        res_offsets.resize(size);
+        size_t haystack_size = haystack_data.size() / n;
+        res_data.reserve(haystack_data.size());
+        res_offsets.resize(haystack_size);
 
         re2_st::RE2::Options regexp_options;
         /// Don't write error messages to stderr.
@@ -232,13 +260,13 @@ struct ReplaceRegexpImpl
 
         Instructions instructions = createInstructions(replacement, num_captures);
 
-        for (size_t i = 0; i < size; ++i)
+        for (size_t i = 0; i < haystack_size; ++i)
         {
             size_t from = i * n;
-            const char * haystack_data = reinterpret_cast<const char *>(data.data() + from);
-            const size_t haystack_length = n;
+            const char * hs_data = reinterpret_cast<const char *>(haystack_data.data() + from);
+            const size_t hs_length = n;
 
-            processString(haystack_data, haystack_length, res_data, res_offset, searcher, num_captures, instructions);
+            processString(hs_data, hs_length, res_data, res_offset, searcher, num_captures, instructions);
             res_offsets[i] = res_offset;
         }
     }

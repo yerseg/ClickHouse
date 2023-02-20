@@ -19,6 +19,8 @@ Replaces the first occurrence of the substring ‘pattern’ (if it exists) in �
 
 Replaces all occurrences of the substring ‘pattern’ in ‘haystack’ by the ‘replacement’ string.
 
+Alias: `replace`.
+
 ## replaceRegexpOne(haystack, pattern, replacement)
 
 Replaces the first occurrence of the substring matching the regular expression ‘pattern’ in ‘haystack‘ by the ‘replacement‘ string.
@@ -87,6 +89,8 @@ SELECT replaceRegexpAll('Hello, World!', '^', 'here: ') AS res
 │ here: Hello, World! │
 └─────────────────────┘
 ```
+
+Alias: `REGEXP_REPLACE`.
 
 ## regexpQuoteMeta(s)
 

@@ -32,6 +32,8 @@ namespace ErrorCodes
   * In most cases, performance is less than Volnitsky (see Volnitsky.h).
   */
 
+namespace impl
+{
 
 class StringSearcherBase
 {
@@ -818,24 +820,25 @@ public:
     }
 };
 
+}
 
-using ASCIICaseSensitiveStringSearcher = StringSearcher<true, true>;
-using ASCIICaseInsensitiveStringSearcher = StringSearcher<false, true>;
-using UTF8CaseSensitiveStringSearcher = StringSearcher<true, false>;
-using UTF8CaseInsensitiveStringSearcher = StringSearcher<false, false>;
-using ASCIICaseSensitiveTokenSearcher = TokenSearcher<ASCIICaseSensitiveStringSearcher>;
-using ASCIICaseInsensitiveTokenSearcher = TokenSearcher<ASCIICaseInsensitiveStringSearcher>;
+using ASCIICaseSensitiveStringSearcher =   impl::StringSearcher<true, true>;
+using ASCIICaseInsensitiveStringSearcher = impl::StringSearcher<false, true>;
+using UTF8CaseSensitiveStringSearcher =    impl::StringSearcher<true, false>;
+using UTF8CaseInsensitiveStringSearcher =  impl::StringSearcher<false, false>;
+using ASCIICaseSensitiveTokenSearcher =    impl::TokenSearcher<ASCIICaseSensitiveStringSearcher>;
+using ASCIICaseInsensitiveTokenSearcher =  impl::TokenSearcher<ASCIICaseInsensitiveStringSearcher>;
 
 /// Use only with short haystacks where cheap initialization is required.
 template <bool CaseInsensitive>
-struct StdLibASCIIStringSearcher : public StringSearcherBase
+struct StdLibASCIIStringSearcher
 {
     const char * const needle_start;
     const char * const needle_end;
 
     template <typename CharT>
     requires (sizeof(CharT) == 1)
-    StdLibASCIIStringSearcher(const CharT * const needle_start_, const size_t needle_size_)
+    StdLibASCIIStringSearcher(const CharT * const needle_start_, size_t needle_size_)
         : needle_start{reinterpret_cast<const char *>(needle_start_)}
         , needle_end{reinterpret_cast<const char *>(needle_start) + needle_size_}
     {}
@@ -845,22 +848,18 @@ struct StdLibASCIIStringSearcher : public StringSearcherBase
     const CharT * search(const CharT * haystack_start, const CharT * const haystack_end) const
     {
         if constexpr (CaseInsensitive)
-        {
             return std::search(
                 haystack_start, haystack_end, needle_start, needle_end,
                 [](char c1, char c2) {return std::toupper(c1) == std::toupper(c2);});
-        }
         else
-        {
             return std::search(
                 haystack_start, haystack_end, needle_start, needle_end,
                 [](char c1, char c2) {return c1 == c2;});
-        }
     }
 
     template <typename CharT>
     requires (sizeof(CharT) == 1)
-    const CharT * search(const CharT * haystack_start, const size_t haystack_length) const
+    const CharT * search(const CharT * haystack_start, size_t haystack_length) const
     {
         return search(haystack_start, haystack_start + haystack_length);
     }
