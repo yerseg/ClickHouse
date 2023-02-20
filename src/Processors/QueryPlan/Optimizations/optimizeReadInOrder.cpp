@@ -82,7 +82,7 @@ ISourceStep * checkSupportedReadingStep(IQueryPlanStep * step)
     return nullptr;
 }
 
-using StepStack = std::vector<IQueryPlanStep*>;
+using StepStack = std::vector<IQueryPlanStep *>;
 
 QueryPlan::Node * findReadingStep(QueryPlan::Node & node, StepStack & backward_path)
 {
@@ -920,7 +920,7 @@ StepInputOrder buildInputOrderInfo(const Names & keys, QueryPlan::Node & node, Q
     }
 
     return {};
-
+}
 
 void requestInputOrderInfo(const InputOrderInfoPtr & input_order_info, QueryPlanStepPtr & reading_step)
 {
@@ -1029,14 +1029,17 @@ void optimizeAggregationInOrder(QueryPlan::Node & node, QueryPlan::Nodes &)
 
     auto * child_node = node.children.front();
 
+    StepStack steps_to_update;
+
     /// TODO: maybe add support for UNION later.
-    std::vector<IQueryPlanStep*> steps_to_update;
-    auto order_info = buildInputOrderInfo(aggregating->getParams().keys, *child_node, steps_to_update, backward_path);
+    QueryPlan::Node * reading_node = findReadingStep(node, steps_to_update);
+
+    auto order_info = buildInputOrderInfo(aggregating->getParams().keys, *child_node, reading_node);
     if (order_info.input_order)
     {
         requestInputOrderInfo(order_info.input_order, reading_node->step);
 
-        aggregating->applyOrder(std::move(order_info.sort_description_for_merging), std::move(order_info.group_by_sort_description));
+        aggregating->applyOrder(std::move(order_info.sort_description_for_merging), std::move(order_info.target_sort_description));
         /// update data stream's sorting properties
         updateStepsDataStreams(steps_to_update);
     }
@@ -1144,12 +1147,17 @@ static bool optimizeJoinInOrder(QueryPlan::Node & node, const std::shared_ptr<Fu
 {
     const auto & key_names_left = join_ptr->getKeyNames(JoinTableSide::Left);
     auto * left_child_node = node.children[0];
-    QueryPlan::Node * left_reading_node = findReadingStep(*left_child_node->children.front());
+
+    StepStack steps_to_update_left;
+
+    QueryPlan::Node * left_reading_node = findReadingStep(*left_child_node->children.front(), steps_to_update_left);
     auto left_order_info = buildInputOrderInfo(key_names_left, *left_child_node, left_reading_node);
 
     const auto & key_names_right = join_ptr->getKeyNames(JoinTableSide::Right);
     auto * right_child_node = node.children[1];
-    QueryPlan::Node * right_reading_node = findReadingStep(*right_child_node->children.front());
+
+    StepStack steps_to_update_right;
+    QueryPlan::Node * right_reading_node = findReadingStep(*right_child_node->children.front(), steps_to_update_right);
     auto right_order_info = buildInputOrderInfo(key_names_right, *right_child_node, right_reading_node);
 
     auto keys_permuation = findCommonOrderInfo(left_order_info, right_order_info);
@@ -1162,14 +1170,16 @@ static bool optimizeJoinInOrder(QueryPlan::Node & node, const std::shared_ptr<Fu
 
     if (left_order_info.input_order)
     {
-        requestInputOrderInfo(left_order_info.input_order, left_reading_node->step);
         join_ptr->setPrefixSortDesctiption(left_order_info.sort_description_for_merging, JoinTableSide::Left);
+        requestInputOrderInfo(left_order_info.input_order, left_reading_node->step);
+        updateStepsDataStreams(steps_to_update_left);
     }
 
     if (right_order_info.input_order)
     {
-        requestInputOrderInfo(right_order_info.input_order, right_reading_node->step);
         join_ptr->setPrefixSortDesctiption(right_order_info.sort_description_for_merging, JoinTableSide::Right);
+        requestInputOrderInfo(right_order_info.input_order, right_reading_node->step);
+        updateStepsDataStreams(steps_to_update_right);
     }
     return true;
 }
@@ -1188,18 +1198,16 @@ void applyOrderForJoin(QueryPlan::Node & node, QueryPlan::Nodes & nodes, const Q
         return;
 
     bool is_read_in_order_optimized = false;
-    if (optimization_settings.read_in_order)
+    if (optimization_settings.read_in_order && optimization_settings.join_in_order)
         is_read_in_order_optimized = optimizeJoinInOrder(node, join_ptr);
 
     auto insert_pre_step = [&nodes, &node](size_t idx, auto && step)
     {
         auto & sort_node = nodes.emplace_back();
-        sort_node.step = std::move(step);
+        sort_node.step = std::forward(step);
         sort_node.children.push_back(node.children[idx]);
         node.children[idx] = &sort_node;
     };
-
-    size_t max_rows_in_filter_set = optimization_settings.max_rows_in_set_to_optimize_join;
 
     auto join_kind = join_ptr->getTableJoin().kind();
     bool kind_allows_filtering = isInner(join_kind) || isLeft(join_kind) || isRight(join_kind);
@@ -1215,14 +1223,18 @@ void applyOrderForJoin(QueryPlan::Node & node, QueryPlan::Nodes & nodes, const Q
         return false;
     };
 
+    const auto & left_stream = node.children[0]->step->getOutputStream();
+    const auto & right_stream = node.children[1]->step->getOutputStream();
+
     /// This optimization relies on the sorting that should buffer the whole stream before emitting any rows.
     /// It doesn't hold such a guarantee for streams with const keys.
     /// Note: it's also doesn't work with the read-in-order optimization.
     /// No checks here because read in order is not applied if we have `CreateSetAndFilterOnTheFlyStep` in the pipeline between the reading and sorting steps.
-    bool has_non_const_keys = has_non_const(query_plan.getCurrentDataStream().header, join_clause.key_names_left)
-        && has_non_const(joined_plan->getCurrentDataStream().header, join_clause.key_names_right);
+    bool has_non_const_keys = has_non_const(left_stream.header, join_ptr->getKeyNames(JoinTableSide::Left))
+        && has_non_const(right_stream.header, join_ptr->getKeyNames(JoinTableSide::Right));
 
-    if (!is_read_in_order_optimized && settings.max_rows_in_set_to_optimize_join > 0 && kind_allows_filtering && has_non_const_keys)
+    size_t max_rows_in_filter_set = optimization_settings.max_rows_in_set_to_optimize_join;
+    if (!is_read_in_order_optimized && max_rows_in_filter_set > 0 && kind_allows_filtering && has_non_const_keys)
     {
         auto crosswise_connection = CreateSetAndFilterOnTheFlyStep::createCrossConnection();
         auto add_create_set = [&](const DataStream & data_stream, const Names & key_names, JoinTableSide join_pos)
@@ -1236,8 +1248,8 @@ void applyOrderForJoin(QueryPlan::Node & node, QueryPlan::Nodes & nodes, const Q
             return step_raw_ptr;
         };
 
-        auto * left_set = add_create_set(node.children[0]->step->getOutputStream(), join_ptr->getKeyNames(JoinTableSide::Left), JoinTableSide::Left);
-        auto * right_set = add_create_set(node.children[1]->step->getOutputStream(), join_ptr->getKeyNames(JoinTableSide::Right), JoinTableSide::Right);
+        auto * left_set = add_create_set(left_stream, join_ptr->getKeyNames(JoinTableSide::Left), JoinTableSide::Left);
+        auto * right_set = add_create_set(right_stream, join_ptr->getKeyNames(JoinTableSide::Right), JoinTableSide::Right);
         if (isInnerOrLeft(join_kind))
             right_set->setFiltering(left_set->getSet());
         if (isInnerOrRight(join_kind))

@@ -34,10 +34,10 @@ void FullSortingMergeJoin::permuteKeys(const std::vector<size_t> & permutation)
 
     Names new_key_names_left;
     Names new_key_names_right;
-    for (size_t i = 0; i < permutation.size(); ++i)
+    for (size_t idx : permutation)
     {
-        new_key_names_left.push_back(join_on.key_names_left[permutation[i]]);
-        new_key_names_right.push_back(join_on.key_names_right[permutation[i]]);
+        new_key_names_left.push_back(join_on.key_names_left[idx]);
+        new_key_names_right.push_back(join_on.key_names_right[idx]);
     }
     join_on.key_names_left = std::move(new_key_names_left);
     join_on.key_names_right = std::move(new_key_names_right);
