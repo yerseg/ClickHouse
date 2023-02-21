@@ -15,7 +15,6 @@ namespace ErrorCodes
 {
     extern const int ARGUMENT_OUT_OF_BOUND;
     extern const int BAD_ARGUMENTS;
-    extern const int ILLEGAL_COLUMN;
 }
 
 struct ReplaceRegexpTraits
