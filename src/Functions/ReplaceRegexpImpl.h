@@ -208,7 +208,6 @@ struct ReplaceRegexpImpl
         }
     }
 
-    template <typename... Args>
     static void vectorVectorConstant(
         const ColumnString::Chars & haystack_data,
         const ColumnString::Offsets & haystack_offsets,
@@ -253,7 +252,6 @@ struct ReplaceRegexpImpl
         }
     }
 
-    template <typename... Args>
     static void vectorConstantVector(
         const ColumnString::Chars & haystack_data,
         const ColumnString::Offsets & haystack_offsets,
@@ -302,7 +300,6 @@ struct ReplaceRegexpImpl
         }
     }
 
-    template <typename... Args>
     static void vectorVectorVector(
         const ColumnString::Chars & haystack_data,
         const ColumnString::Offsets & haystack_offsets,
