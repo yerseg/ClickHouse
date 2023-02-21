@@ -16,12 +16,12 @@ namespace ErrorCodes
     extern const int ILLEGAL_TYPE_OF_ARGUMENT;
 }
 
-
 template <typename Impl, typename Name>
 class FunctionStringReplace : public IFunction
 {
 public:
     static constexpr auto name = Name::name;
+
     static FunctionPtr create(ContextPtr) { return std::make_shared<FunctionStringReplace>(); }
 
     String getName() const override { return name; }
@@ -65,11 +65,11 @@ public:
         const ColumnString * col_haystack = checkAndGetColumn<ColumnString>(column_haystack.get());
         const ColumnFixedString * col_haystack_fixed = checkAndGetColumn<ColumnFixedString>(column_haystack.get());
 
-        const ColumnConst * col_needle_const = typeid_cast<const ColumnConst *>(column_needle.get());
-        const ColumnConst * col_replacement_const = typeid_cast<const ColumnConst *>(column_replacement.get());
-
         const ColumnString * col_needle_vector = checkAndGetColumn<ColumnString>(column_needle.get());
+        const ColumnConst * col_needle_const = checkAndGetColumn<ColumnConst>(column_needle.get());
+
         const ColumnString * col_replacement_vector = checkAndGetColumn<ColumnString>(column_replacement.get());
+        const ColumnConst * col_replacement_const = checkAndGetColumn<ColumnConst>(column_replacement.get());
 
         auto col_res = ColumnString::create();
 
