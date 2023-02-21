@@ -215,7 +215,7 @@ struct ReplaceStringImpl
             const auto * const cur_replacement_data = &replacement_data[prev_replacement_offset];
             const size_t cur_replacement_length = replacement_offsets[i] - prev_replacement_offset - 1;
 
-            /// Using "slow" "stdlib searcher instead of Volnitsky just because of simplicitly
+            /// Using "slow" "stdlib searcher instead of Volnitsky just to keep things simple
             StdLibASCIIStringSearcher</*CaseInsensitive*/ false> searcher(needle.data(), needle.size());
 
             const auto * last_match = static_cast<UInt8 *>(nullptr);
