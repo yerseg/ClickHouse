@@ -141,48 +141,40 @@ struct ReplaceStringImpl
             /// Using "slow" "stdlib searcher instead of Volnitsky because there is a different pattern in each row
             StdLibASCIIStringSearcher</*CaseInsensitive*/ false> searcher(cur_needle_data, cur_needle_length);
 
-            const auto * const cur_haystack_end = cur_haystack_data + cur_haystack_length;
-
-            const auto * start_pos = cur_haystack_data;
             const auto * last_match = static_cast<UInt8 *>(nullptr);
+            const auto * start_pos = cur_haystack_data;
+            const auto * const cur_haystack_end = cur_haystack_data + cur_haystack_length;
 
             while (start_pos < cur_haystack_end)
             {
-                const auto * const match = searcher.search(start_pos, cur_haystack_end);
-                if (match != cur_haystack_end)
+                if (const auto * const match = searcher.search(start_pos, cur_haystack_end); match != cur_haystack_end)
                 {
                     /// Copy prefix before match
                     res_data.resize(res_data.size() + (match - start_pos));
                     memcpy(&res_data[res_offset], start_pos, match - start_pos);
                     res_offset += (match - start_pos);
 
-                    /// Insert replacement
+                    /// Insert replacement for match
                     res_data.resize(res_data.size() + replacement.size());
                     memcpy(&res_data[res_offset], replacement.data(), replacement.size());
                     res_offset += replacement.size();
 
-                    start_pos = match + cur_needle_length;
                     last_match = match;
+                    start_pos = match + cur_needle_length;
 
                     if constexpr (replace == ReplaceStringTraits::Replace::First)
-                    {
-                        size_t bytes = (cur_haystack_end - last_match - cur_needle_length + 1);
-                        res_data.resize(res_data.size() + bytes);
-                        memcpy(&res_data[res_offset], start_pos, bytes);
-                        res_offset += bytes;
                         break;
-                    }
                 }
                 else
-                {
-                    size_t bytes = (last_match == nullptr) ? (cur_haystack_end - cur_haystack_data + 1)
-                                                           : (cur_haystack_end - last_match - cur_needle_length + 1);
-                    res_data.resize(res_data.size() + bytes);
-                    memcpy(&res_data[res_offset], start_pos, bytes);
-                    res_offset += bytes;
                     break;
-                }
             }
+
+            /// Copy suffix after last match
+            size_t bytes = (last_match == nullptr) ? (cur_haystack_end - cur_haystack_data + 1)
+                                                   : (cur_haystack_end - last_match - cur_needle_length + 1);
+            res_data.resize(res_data.size() + bytes);
+            memcpy(&res_data[res_offset], start_pos, bytes);
+            res_offset += bytes;
 
             res_offsets[i] = res_offset;
 
@@ -223,51 +215,43 @@ struct ReplaceStringImpl
             const auto * const cur_replacement_data = &replacement_data[prev_replacement_offset];
             const size_t cur_replacement_length = replacement_offsets[i] - prev_replacement_offset - 1;
 
-            /// Using "slow" "stdlib searcher instead of Volnitsky because there is a different pattern in each row
+            /// Using "slow" "stdlib searcher instead of Volnitsky just because of simplicitly
             StdLibASCIIStringSearcher</*CaseInsensitive*/ false> searcher(needle.data(), needle.size());
 
-            const auto * const cur_haystack_end = cur_haystack_data + cur_haystack_length;
-
-            const auto * start_pos = cur_haystack_data;
             const auto * last_match = static_cast<UInt8 *>(nullptr);
+            const auto * start_pos = cur_haystack_data;
+            const auto * const cur_haystack_end = cur_haystack_data + cur_haystack_length;
 
             while (start_pos < cur_haystack_end)
             {
-                const auto * const match = searcher.search(start_pos, cur_haystack_end);
-                if (match != cur_haystack_end)
+                if (const auto * const match = searcher.search(start_pos, cur_haystack_end); match != cur_haystack_end)
                 {
                     /// Copy prefix before match
                     res_data.resize(res_data.size() + (match - start_pos));
                     memcpy(&res_data[res_offset], start_pos, match - start_pos);
                     res_offset += (match - start_pos);
 
-                    /// Insert replacement
+                    /// Insert replacement for match
                     res_data.resize(res_data.size() + cur_replacement_length);
                     memcpy(&res_data[res_offset], cur_replacement_data, cur_replacement_length);
                     res_offset += cur_replacement_length;
 
-                    start_pos = match + needle.size();
                     last_match = match;
+                    start_pos = match + needle.size();
 
                     if constexpr (replace == ReplaceStringTraits::Replace::First)
-                    {
-                        size_t bytes = (cur_haystack_end - last_match - needle.size() + 1);
-                        res_data.resize(res_data.size() + bytes);
-                        memcpy(&res_data[res_offset], start_pos, bytes);
-                        res_offset += bytes;
                         break;
-                    }
                 }
                 else
-                {
-                    size_t bytes = (last_match == nullptr) ? (cur_haystack_end - cur_haystack_data + 1)
-                                                           : (cur_haystack_end - last_match - needle.size() + 1);
-                    res_data.resize(res_data.size() + bytes);
-                    memcpy(&res_data[res_offset], start_pos, bytes);
-                    res_offset += bytes;
                     break;
-                }
             }
+
+            /// Copy suffix after last match
+            size_t bytes = (last_match == nullptr) ? (cur_haystack_end - cur_haystack_data + 1)
+                                                   : (cur_haystack_end - last_match - needle.size() + 1);
+            res_data.resize(res_data.size() + bytes);
+            memcpy(&res_data[res_offset], start_pos, bytes);
+            res_offset += bytes;
 
             res_offsets[i] = res_offset;
 
@@ -317,48 +301,40 @@ struct ReplaceStringImpl
             /// Using "slow" "stdlib searcher instead of Volnitsky because there is a different pattern in each row
             StdLibASCIIStringSearcher</*CaseInsensitive*/ false> searcher(cur_needle_data, cur_needle_length);
 
-            const auto * const cur_haystack_end = cur_haystack_data + cur_haystack_length;
-
-            const auto * start_pos = cur_haystack_data;
             const auto * last_match = static_cast<UInt8 *>(nullptr);
+            const auto * start_pos = cur_haystack_data;
+            const auto * const cur_haystack_end = cur_haystack_data + cur_haystack_length;
 
             while (start_pos < cur_haystack_end)
             {
-                const auto * const match = searcher.search(start_pos, cur_haystack_end);
-                if (match != cur_haystack_end)
+                if (const auto * const match = searcher.search(start_pos, cur_haystack_end); match != cur_haystack_end)
                 {
                     /// Copy prefix before match
                     res_data.resize(res_data.size() + (match - start_pos));
                     memcpy(&res_data[res_offset], start_pos, match - start_pos);
                     res_offset += (match - start_pos);
 
-                    /// Insert replacement
+                    /// Insert replacement for match
                     res_data.resize(res_data.size() + cur_replacement_length);
                     memcpy(&res_data[res_offset], cur_replacement_data, cur_replacement_length);
                     res_offset += cur_replacement_length;
 
-                    start_pos = match + cur_needle_length;
                     last_match = match;
+                    start_pos = match + cur_needle_length;
 
                     if constexpr (replace == ReplaceStringTraits::Replace::First)
-                    {
-                        size_t bytes = (cur_haystack_end - last_match - cur_needle_length + 1);
-                        res_data.resize(res_data.size() + bytes);
-                        memcpy(&res_data[res_offset], start_pos, bytes);
-                        res_offset += bytes;
                         break;
-                    }
                 }
                 else
-                {
-                    size_t bytes = (last_match == nullptr) ? (cur_haystack_end - cur_haystack_data + 1)
-                                                           : (cur_haystack_end - last_match - cur_needle_length + 1);
-                    res_data.resize(res_data.size() + bytes);
-                    memcpy(&res_data[res_offset], start_pos, bytes);
-                    res_offset += bytes;
                     break;
-                }
             }
+
+            /// Copy suffix after last match
+            size_t bytes = (last_match == nullptr) ? (cur_haystack_end - cur_haystack_data + 1)
+                                                   : (cur_haystack_end - last_match - cur_needle_length + 1);
+            res_data.resize(res_data.size() + bytes);
+            memcpy(&res_data[res_offset], start_pos, bytes);
+            res_offset += bytes;
 
             res_offsets[i] = res_offset;
 

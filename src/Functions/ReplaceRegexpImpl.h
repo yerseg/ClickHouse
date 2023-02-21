@@ -216,6 +216,8 @@ struct ReplaceRegexpImpl
         ColumnString::Chars & res_data,
         ColumnString::Offsets & res_offsets)
     {
+        assert(haystack_offsets.size() == needle_offsets.size());
+
         ColumnString::Offset res_offset = 0;
         res_data.reserve(haystack_data.size());
         size_t haystack_size = haystack_offsets.size();
@@ -260,10 +262,10 @@ struct ReplaceRegexpImpl
         ColumnString::Chars & res_data,
         ColumnString::Offsets & res_offsets)
     {
+        assert(haystack_offsets.size() == replacement_offsets.size());
+
         if (needle.empty())
             throw Exception(ErrorCodes::ARGUMENT_OUT_OF_BOUND, "Length of the pattern argument in function {} must be greater than 0.", name);
-
-        assert(haystack_offsets.size() == replacement_offsets.size());
 
         ColumnString::Offset res_offset = 0;
         res_data.reserve(haystack_data.size());
@@ -309,6 +311,9 @@ struct ReplaceRegexpImpl
         ColumnString::Chars & res_data,
         ColumnString::Offsets & res_offsets)
     {
+        assert(haystack_offsets.size() == needle_offsets.size());
+        assert(needle_offsets.size() == replacement_offsets.size());
+
         ColumnString::Offset res_offset = 0;
         res_data.reserve(haystack_data.size());
         size_t haystack_size = haystack_offsets.size();
