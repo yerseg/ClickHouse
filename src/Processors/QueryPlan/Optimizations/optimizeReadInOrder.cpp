@@ -1201,10 +1201,10 @@ void applyOrderForJoin(QueryPlan::Node & node, QueryPlan::Nodes & nodes, const Q
     if (optimization_settings.read_in_order && optimization_settings.join_in_order)
         is_read_in_order_optimized = optimizeJoinInOrder(node, join_ptr);
 
-    auto insert_pre_step = [&nodes, &node](size_t idx, auto && step)
+    auto insert_pre_step = [&nodes, &node](size_t idx, auto step)
     {
         auto & sort_node = nodes.emplace_back();
-        sort_node.step = std::forward(step);
+        sort_node.step = std::move(step);
         sort_node.children.push_back(node.children[idx]);
         node.children[idx] = &sort_node;
     };
