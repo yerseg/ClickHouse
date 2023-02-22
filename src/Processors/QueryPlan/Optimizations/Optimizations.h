@@ -107,6 +107,8 @@ using Stack = std::vector<Frame>;
 void optimizePrimaryKeyCondition(const Stack & stack);
 void optimizeReadInOrder(QueryPlan::Node & node, QueryPlan::Nodes & nodes);
 void optimizeAggregationInOrder(QueryPlan::Node & node, QueryPlan::Nodes &);
+
+/// Insert sorting step before join if needed or use read in order
 void applyOrderForJoin(QueryPlan::Node & node, QueryPlan::Nodes & nodes, const QueryPlanOptimizationSettings & optimization_settings);
 
 /// Enable memory bound merging of aggregation states for remote queries
