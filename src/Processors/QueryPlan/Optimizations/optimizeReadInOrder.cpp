@@ -993,7 +993,7 @@ void optimizeAggregationInOrder(QueryPlan::Node & node, QueryPlan::Nodes &)
     StepStack steps_to_update;
 
     /// TODO: maybe add support for UNION later.
-    QueryPlan::Node * reading_node = findReadingStep(node, steps_to_update);
+    QueryPlan::Node * reading_node = findReadingStep(*child_node, steps_to_update);
 
     auto order_info = buildInputOrderInfo(aggregating->getParams().keys, *child_node, reading_node);
     if (order_info.input_order)

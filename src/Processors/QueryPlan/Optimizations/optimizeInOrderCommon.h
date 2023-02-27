@@ -1,3 +1,5 @@
+#pragma once
+
 #include <Processors/QueryPlan/Optimizations/Optimizations.h>
 #include <Storages/SelectQueryInfo.h>
 
