@@ -166,28 +166,29 @@ namespace
 }
 
 BackupCoordinationRemote::BackupCoordinationRemote(
-    const BackupKeeperSettings & keeper_settings_,
+    const BackupCoordinationStageSync::CoordinationSettings & keeper_settings_,
     const String & root_zookeeper_path_,
+    const String & current_host_,
     const String & backup_uuid_,
     zkutil::GetZooKeeper get_zookeeper_,
     bool is_internal_)
     : keeper_settings(keeper_settings_)
+    , backup_uuid(backup_uuid_)
     , root_zookeeper_path(root_zookeeper_path_)
     , zookeeper_path(root_zookeeper_path_ + "/backup-" + backup_uuid_)
-    , backup_uuid(backup_uuid_)
+    , current_host(current_host_)
     , get_zookeeper(get_zookeeper_)
     , is_internal(is_internal_)
-{
-    zookeeper_retries_info = ZooKeeperRetriesInfo(
+    , global_zookeeper_retries_info(
         "BackupCoordinationRemote",
         &Poco::Logger::get("BackupCoordinationRemote"),
         keeper_settings.keeper_max_retries,
         keeper_settings.keeper_retry_initial_backoff_ms,
-        keeper_settings.keeper_retry_max_backoff_ms);
-
+        keeper_settings.keeper_retry_max_backoff_ms)
+{
     createRootNodes();
     stage_sync.emplace(
-        zookeeper_path + "/stage", [this] { return getZooKeeper(); }, &Poco::Logger::get("BackupCoordination"));
+        zookeeper_path, keeper_settings, [this] { return getZooKeeper(); }, &Poco::Logger::get("BackupCoordination"));
 }
 
 BackupCoordinationRemote::~BackupCoordinationRemote()
@@ -215,6 +216,15 @@ zkutil::ZooKeeperPtr BackupCoordinationRemote::getZooKeeperNoLock() const
     {
         zookeeper = get_zookeeper();
 
+        /// Recreate this ephemeral node to signal that we are alive.
+        if (is_internal)
+        {
+            String alive_node_path = zookeeper_path + "/alive|" + current_host;
+            auto code = zookeeper->tryCreate(alive_node_path, "", zkutil::CreateMode::Ephemeral);
+            if (code != Coordination::Error::ZOK && code != Coordination::Error::ZNODEEXISTS)
+                throw zkutil::KeeperException(code, alive_node_path);
+        }
+
         /// It's possible that we connected to different [Zoo]Keeper instance
         /// so we may read a bit stale state.
         zookeeper->sync(zookeeper_path);
@@ -224,37 +234,49 @@ zkutil::ZooKeeperPtr BackupCoordinationRemote::getZooKeeperNoLock() const
 
 void BackupCoordinationRemote::createRootNodes()
 {
-    auto zk = getZooKeeper();
-    zk->createAncestors(zookeeper_path);
-    zk->createIfNotExists(zookeeper_path, "");
-    zk->createIfNotExists(zookeeper_path + "/repl_part_names", "");
-    zk->createIfNotExists(zookeeper_path + "/repl_mutations", "");
-    zk->createIfNotExists(zookeeper_path + "/repl_data_paths", "");
-    zk->createIfNotExists(zookeeper_path + "/repl_access", "");
-    zk->createIfNotExists(zookeeper_path + "/file_names", "");
-    zk->createIfNotExists(zookeeper_path + "/file_infos", "");
-    zk->createIfNotExists(zookeeper_path + "/archive_suffixes", "");
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("createRootNodes", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            zk->createAncestors(zookeeper_path);
+            zk->createIfNotExists(zookeeper_path, "");
+            zk->createIfNotExists(zookeeper_path + "/repl_part_names", "");
+            zk->createIfNotExists(zookeeper_path + "/repl_mutations", "");
+            zk->createIfNotExists(zookeeper_path + "/repl_data_paths", "");
+            zk->createIfNotExists(zookeeper_path + "/repl_access", "");
+            zk->createIfNotExists(zookeeper_path + "/file_names", "");
+            zk->createIfNotExists(zookeeper_path + "/file_infos", "");
+            zk->createIfNotExists(zookeeper_path + "/archive_suffixes", "");
+        });
 }
 
 void BackupCoordinationRemote::removeAllNodes()
 {
-    /// Usually this function is called by the initiator when a backup is complete so we don't need the coordination anymore.
-    ///
-    /// However there can be a rare situation when this function is called after an error occurs on the initiator of a query
-    /// while some hosts are still making the backup. Removing all the nodes will remove the parent node of the backup coordination
-    /// at `zookeeper_path` which might cause such hosts to stop with exception "ZNONODE". Or such hosts might still do some useless part
-    /// of their backup work before that. Anyway in this case backup won't be finalized (because only an initiator can do that).
-    auto zk = getZooKeeper();
-    zk->removeRecursive(zookeeper_path);
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("removeAllNodes", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            /// Usually this function is called by the initiator when a backup is complete so we don't need the coordination anymore.
+            ///
+            /// However there can be a rare situation when this function is called after an error occurs on the initiator of a query
+            /// while some hosts are still making the backup. Removing all the nodes will remove the parent node of the backup coordination
+            /// at `zookeeper_path` which might cause such hosts to stop with exception "ZNONODE". Or such hosts might still do some useless part
+            /// of their backup work before that. Anyway in this case backup won't be finalized (because only an initiator can do that).
+            auto zk = getZooKeeper();
+            zk->removeRecursive(zookeeper_path);
+        });
 }
 
 
-void BackupCoordinationRemote::setStage(const String & current_host, const String & new_stage, const String & message)
+void BackupCoordinationRemote::setStage(const String &, const String & new_stage, const String & message)
 {
     stage_sync->set(current_host, new_stage, message);
 }
 
-void BackupCoordinationRemote::setError(const String & current_host, const Exception & exception)
+void BackupCoordinationRemote::setError(const String &, const Exception & exception)
 {
     stage_sync->setError(current_host, exception);
 }
@@ -282,11 +304,17 @@ void BackupCoordinationRemote::addReplicatedPartNames(
             throw Exception(ErrorCodes::LOGICAL_ERROR, "addReplicatedPartNames() must not be called after preparing");
     }
 
-    auto zk = getZooKeeper();
-    String path = zookeeper_path + "/repl_part_names/" + escapeForFileName(table_shared_id);
-    zk->createIfNotExists(path, "");
-    path += "/" + escapeForFileName(replica_name);
-    zk->create(path, ReplicatedPartNames::serialize(part_names_and_checksums, table_name_for_logs), zkutil::CreateMode::Persistent);
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("addReplicatedPartNames", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String path = zookeeper_path + "/repl_part_names/" + escapeForFileName(table_shared_id);
+            zk->createIfNotExists(path, "");
+            path += "/" + escapeForFileName(replica_name);
+            zk->createIfNotExists(path, ReplicatedPartNames::serialize(part_names_and_checksums, table_name_for_logs));
+        });
 }
 
 Strings BackupCoordinationRemote::getReplicatedPartNames(const String & table_shared_id, const String & replica_name) const
@@ -308,11 +336,17 @@ void BackupCoordinationRemote::addReplicatedMutations(
             throw Exception(ErrorCodes::LOGICAL_ERROR, "addReplicatedMutations() must not be called after preparing");
     }
 
-    auto zk = getZooKeeper();
-    String path = zookeeper_path + "/repl_mutations/" + escapeForFileName(table_shared_id);
-    zk->createIfNotExists(path, "");
-    path += "/" + escapeForFileName(replica_name);
-    zk->create(path, ReplicatedMutations::serialize(mutations, table_name_for_logs), zkutil::CreateMode::Persistent);
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("addReplicatedMutations", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String path = zookeeper_path + "/repl_mutations/" + escapeForFileName(table_shared_id);
+            zk->createIfNotExists(path, "");
+            path += "/" + escapeForFileName(replica_name);
+            zk->createIfNotExists(path, ReplicatedMutations::serialize(mutations, table_name_for_logs));
+        });
 }
 
 std::vector<IBackupCoordination::MutationInfo> BackupCoordinationRemote::getReplicatedMutations(const String & table_shared_id, const String & replica_name) const
@@ -332,11 +366,17 @@ void BackupCoordinationRemote::addReplicatedDataPath(
             throw Exception(ErrorCodes::LOGICAL_ERROR, "addReplicatedDataPath() must not be called after preparing");
     }
 
-    auto zk = getZooKeeper();
-    String path = zookeeper_path + "/repl_data_paths/" + escapeForFileName(table_shared_id);
-    zk->createIfNotExists(path, "");
-    path += "/" + escapeForFileName(data_path);
-    zk->createIfNotExists(path, "");
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("createRootNodes", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String path = zookeeper_path + "/repl_data_paths/" + escapeForFileName(table_shared_id);
+            zk->createIfNotExists(path, "");
+            path += "/" + escapeForFileName(data_path);
+            zk->createIfNotExists(path, "");
+        });
 }
 
 Strings BackupCoordinationRemote::getReplicatedDataPaths(const String & table_shared_id) const
@@ -352,52 +392,59 @@ void BackupCoordinationRemote::prepareReplicatedTables() const
     if (replicated_tables)
         return;
 
-    replicated_tables.emplace();
-    auto zk = getZooKeeperNoLock();
-
-    {
-        String path = zookeeper_path + "/repl_part_names";
-        for (const String & escaped_table_shared_id : zk->getChildren(path))
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("prepareReplicatedTables", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
         {
-            String table_shared_id = unescapeForFileName(escaped_table_shared_id);
-            String path2 = path + "/" + escaped_table_shared_id;
-            for (const String & escaped_replica_name : zk->getChildren(path2))
-            {
-                String replica_name = unescapeForFileName(escaped_replica_name);
-                auto part_names = ReplicatedPartNames::deserialize(zk->get(path2 + "/" + escaped_replica_name));
-                replicated_tables->addPartNames(table_shared_id, part_names.table_name_for_logs, replica_name, part_names.part_names_and_checksums);
-            }
-        }
-    }
+            replicated_tables.emplace();
+            auto zk = getZooKeeperNoLock();
 
-    {
-        String path = zookeeper_path + "/repl_mutations";
-        for (const String & escaped_table_shared_id : zk->getChildren(path))
-        {
-            String table_shared_id = unescapeForFileName(escaped_table_shared_id);
-            String path2 = path + "/" + escaped_table_shared_id;
-            for (const String & escaped_replica_name : zk->getChildren(path2))
             {
-                String replica_name = unescapeForFileName(escaped_replica_name);
-                auto mutations = ReplicatedMutations::deserialize(zk->get(path2 + "/" + escaped_replica_name));
-                replicated_tables->addMutations(table_shared_id, mutations.table_name_for_logs, replica_name, mutations.mutations);
+                String path = zookeeper_path + "/repl_part_names";
+                for (const String & escaped_table_shared_id : zk->getChildren(path))
+                {
+                    String table_shared_id = unescapeForFileName(escaped_table_shared_id);
+                    String path2 = path + "/" + escaped_table_shared_id;
+                    for (const String & escaped_replica_name : zk->getChildren(path2))
+                    {
+                        String replica_name = unescapeForFileName(escaped_replica_name);
+                        auto part_names = ReplicatedPartNames::deserialize(zk->get(path2 + "/" + escaped_replica_name));
+                        replicated_tables->addPartNames(
+                            table_shared_id, part_names.table_name_for_logs, replica_name, part_names.part_names_and_checksums);
+                    }
+                }
             }
-        }
-    }
 
-    {
-        String path = zookeeper_path + "/repl_data_paths";
-        for (const String & escaped_table_shared_id : zk->getChildren(path))
-        {
-            String table_shared_id = unescapeForFileName(escaped_table_shared_id);
-            String path2 = path + "/" + escaped_table_shared_id;
-            for (const String & escaped_data_path : zk->getChildren(path2))
             {
-                String data_path = unescapeForFileName(escaped_data_path);
-                replicated_tables->addDataPath(table_shared_id, data_path);
+                String path = zookeeper_path + "/repl_mutations";
+                for (const String & escaped_table_shared_id : zk->getChildren(path))
+                {
+                    String table_shared_id = unescapeForFileName(escaped_table_shared_id);
+                    String path2 = path + "/" + escaped_table_shared_id;
+                    for (const String & escaped_replica_name : zk->getChildren(path2))
+                    {
+                        String replica_name = unescapeForFileName(escaped_replica_name);
+                        auto mutations = ReplicatedMutations::deserialize(zk->get(path2 + "/" + escaped_replica_name));
+                        replicated_tables->addMutations(table_shared_id, mutations.table_name_for_logs, replica_name, mutations.mutations);
+                    }
+                }
             }
-        }
-    }
+
+            {
+                String path = zookeeper_path + "/repl_data_paths";
+                for (const String & escaped_table_shared_id : zk->getChildren(path))
+                {
+                    String table_shared_id = unescapeForFileName(escaped_table_shared_id);
+                    String path2 = path + "/" + escaped_table_shared_id;
+                    for (const String & escaped_data_path : zk->getChildren(path2))
+                    {
+                        String data_path = unescapeForFileName(escaped_data_path);
+                        replicated_tables->addDataPath(table_shared_id, data_path);
+                    }
+                }
+            }
+        });
 }
 
 
@@ -409,13 +456,19 @@ void BackupCoordinationRemote::addReplicatedAccessFilePath(const String & access
             throw Exception(ErrorCodes::LOGICAL_ERROR, "addReplicatedAccessFilePath() must not be called after preparing");
     }
 
-    auto zk = getZooKeeper();
-    String path = zookeeper_path + "/repl_access/" + escapeForFileName(access_zk_path);
-    zk->createIfNotExists(path, "");
-    path += "/" + AccessEntityTypeInfo::get(access_entity_type).name;
-    zk->createIfNotExists(path, "");
-    path += "/" + host_id;
-    zk->createIfNotExists(path, file_path);
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("addReplicatedAccessFilePath", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String path = zookeeper_path + "/repl_access/" + escapeForFileName(access_zk_path);
+            zk->createIfNotExists(path, "");
+            path += "/" + AccessEntityTypeInfo::get(access_entity_type).name;
+            zk->createIfNotExists(path, "");
+            path += "/" + host_id;
+            zk->createIfNotExists(path, file_path);
+        });
 }
 
 Strings BackupCoordinationRemote::getReplicatedAccessFilePaths(const String & access_zk_path, AccessEntityType access_entity_type, const String & host_id) const
@@ -430,48 +483,59 @@ void BackupCoordinationRemote::prepareReplicatedAccess() const
     if (replicated_access)
         return;
 
-    replicated_access.emplace();
-    auto zk = getZooKeeperNoLock();
-
-    String path = zookeeper_path + "/repl_access";
-    for (const String & escaped_access_zk_path : zk->getChildren(path))
-    {
-        String access_zk_path = unescapeForFileName(escaped_access_zk_path);
-        String path2 = path + "/" + escaped_access_zk_path;
-        for (const String & type_str : zk->getChildren(path2))
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("prepareReplicatedAccess", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
         {
-            AccessEntityType type = AccessEntityTypeInfo::parseType(type_str);
-            String path3 = path2 + "/" + type_str;
-            for (const String & host_id : zk->getChildren(path3))
-            {
-                String file_path = zk->get(path3 + "/" + host_id);
-                replicated_access->addFilePath(access_zk_path, type, host_id, file_path);
-            }
-        }
-    }
-}
+            replicated_access.emplace();
+            auto zk = getZooKeeperNoLock();
 
+            String path = zookeeper_path + "/repl_access";
+            for (const String & escaped_access_zk_path : zk->getChildren(path))
+            {
+                String access_zk_path = unescapeForFileName(escaped_access_zk_path);
+                String path2 = path + "/" + escaped_access_zk_path;
+                for (const String & type_str : zk->getChildren(path2))
+                {
+                    AccessEntityType type = AccessEntityTypeInfo::parseType(type_str);
+                    String path3 = path2 + "/" + type_str;
+                    for (const String & host_id : zk->getChildren(path3))
+                    {
+                        String file_path = zk->get(path3 + "/" + host_id);
+                        replicated_access->addFilePath(access_zk_path, type, host_id, file_path);
+                    }
+                }
+            }
+        });
+}
 
 void BackupCoordinationRemote::addFileInfo(const FileInfo & file_info, bool & is_data_file_required)
 {
-    auto zk = getZooKeeper();
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("addFileInfo", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
 
-    String full_path = zookeeper_path + "/file_names/" + escapeForFileName(file_info.file_name);
-    String size_and_checksum = serializeSizeAndChecksum(std::pair{file_info.size, file_info.checksum});
-    zk->create(full_path, size_and_checksum, zkutil::CreateMode::Persistent);
+            String full_path = zookeeper_path + "/file_names/" + escapeForFileName(file_info.file_name);
+            String size_and_checksum = serializeSizeAndChecksum(std::pair{file_info.size, file_info.checksum});
+            zk->createIfNotExists(full_path, size_and_checksum);
 
-    if (!file_info.size)
-    {
-        is_data_file_required = false;
-        return;
-    }
+            if (!file_info.size)
+            {
+                is_data_file_required = false;
+                return;
+            }
 
-    full_path = zookeeper_path + "/file_infos/" + size_and_checksum;
-    auto code = zk->tryCreate(full_path, serializeFileInfo(file_info), zkutil::CreateMode::Persistent);
-    if ((code != Coordination::Error::ZOK) && (code != Coordination::Error::ZNODEEXISTS))
-        throw zkutil::KeeperException(code, full_path);
+            full_path = zookeeper_path + "/file_infos/" + size_and_checksum;
+            auto code = zk->tryCreate(full_path, serializeFileInfo(file_info), zkutil::CreateMode::Persistent);
+            if ((code != Coordination::Error::ZOK) && (code != Coordination::Error::ZNODEEXISTS))
+                throw zkutil::KeeperException(code, full_path);
 
-    is_data_file_required = (code == Coordination::Error::ZOK) && (file_info.size > file_info.base_size);
+            is_data_file_required = (code == Coordination::Error::ZOK) && (file_info.size > file_info.base_size);
+        });
 }
 
 void BackupCoordinationRemote::updateFileInfo(const FileInfo & file_info)
@@ -479,22 +543,31 @@ void BackupCoordinationRemote::updateFileInfo(const FileInfo & file_info)
     if (!file_info.size)
         return; /// we don't keep FileInfos for empty files, nothing to update
 
-    auto zk = getZooKeeper();
-    String size_and_checksum = serializeSizeAndChecksum(std::pair{file_info.size, file_info.checksum});
-    String full_path = zookeeper_path + "/file_infos/" + size_and_checksum;
-    for (size_t attempt = 0; attempt < MAX_ZOOKEEPER_ATTEMPTS; ++attempt)
-    {
-        Coordination::Stat stat;
-        auto new_info = deserializeFileInfo(zk->get(full_path, &stat));
-        new_info.archive_suffix = file_info.archive_suffix;
-        auto code = zk->trySet(full_path, serializeFileInfo(new_info), stat.version);
-        if (code == Coordination::Error::ZOK)
-            return;
-        bool is_last_attempt = (attempt == MAX_ZOOKEEPER_ATTEMPTS - 1);
-        if ((code != Coordination::Error::ZBADVERSION) || is_last_attempt)
-            throw zkutil::KeeperException(code, full_path);
-    }
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("updateFileInfo", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String size_and_checksum = serializeSizeAndChecksum(std::pair{file_info.size, file_info.checksum});
+            String full_path = zookeeper_path + "/file_infos/" + size_and_checksum;
+
+            /// FIXME: Do we need internal retries?
+            for (size_t attempt = 0; attempt < MAX_ZOOKEEPER_ATTEMPTS; ++attempt)
+            {
+                Coordination::Stat stat;
+                auto new_info = deserializeFileInfo(zk->get(full_path, &stat));
+                new_info.archive_suffix = file_info.archive_suffix;
+                auto code = zk->trySet(full_path, serializeFileInfo(new_info), stat.version);
+                if (code == Coordination::Error::ZOK)
+                    return;
+                bool is_last_attempt = (attempt == MAX_ZOOKEEPER_ATTEMPTS - 1);
+                if ((code != Coordination::Error::ZBADVERSION) || is_last_attempt)
+                    throw zkutil::KeeperException(code, full_path);
+            }
+        });
 }
+
 
 std::vector<FileInfo> BackupCoordinationRemote::getAllFileInfos() const
 {
@@ -539,12 +612,15 @@ std::vector<FileInfo> BackupCoordinationRemote::getAllFileInfos() const
 
     std::vector<Strings> batched_escaped_names;
     {
+        auto zookeeper_retries_info = global_zookeeper_retries_info;
         ZooKeeperRetriesControl retries_ctl("getAllFileInfos::getChildren", zookeeper_retries_info);
-        retries_ctl.retryLoop([&]()
-        {
-            auto zk = getZooKeeper();
-            batched_escaped_names = split_vector(zk->getChildren(zookeeper_path + "/file_names"), keeper_settings.batch_size_for_keeper_multiread);
-        });
+        retries_ctl.retryLoop(
+            [&]()
+            {
+                auto zk = getZooKeeper();
+                batched_escaped_names
+                    = split_vector(zk->getChildren(zookeeper_path + "/file_names"), keeper_settings.batch_size_for_keeper_multiread);
+            });
     }
 
     std::vector<FileInfo> file_infos;
@@ -560,12 +636,14 @@ std::vector<FileInfo> BackupCoordinationRemote::getAllFileInfos() const
                 file_names_paths.emplace_back(zookeeper_path + "/file_names/" + escaped_name);
 
 
+            auto zookeeper_retries_info = global_zookeeper_retries_info;
             ZooKeeperRetriesControl retries_ctl("getAllFileInfos::getSizesAndChecksums", zookeeper_retries_info);
-            retries_ctl.retryLoop([&]
-            {
-                auto zk = getZooKeeper();
-                sizes_and_checksums = zk->get(file_names_paths);
-            });
+            retries_ctl.retryLoop(
+                [&]
+                {
+                    auto zk = getZooKeeper();
+                    sizes_and_checksums = zk->get(file_names_paths);
+                });
         }
 
         Strings non_empty_file_names;
@@ -602,12 +680,14 @@ std::vector<FileInfo> BackupCoordinationRemote::getAllFileInfos() const
         }
 
         zkutil::ZooKeeper::MultiGetResponse non_empty_file_infos_serialized;
+        auto zookeeper_retries_info = global_zookeeper_retries_info;
         ZooKeeperRetriesControl retries_ctl("getAllFileInfos::getFileInfos", zookeeper_retries_info);
-        retries_ctl.retryLoop([&]()
-        {
-            auto zk = getZooKeeper();
-            non_empty_file_infos_serialized = zk->get(non_empty_file_infos_paths);
-        });
+        retries_ctl.retryLoop(
+            [&]()
+            {
+                auto zk = getZooKeeper();
+                non_empty_file_infos_serialized = zk->get(non_empty_file_infos_paths);
+            });
 
         /// Process non empty files
         for (size_t i = 0; i < non_empty_file_names.size(); ++i)
@@ -628,97 +708,166 @@ std::vector<FileInfo> BackupCoordinationRemote::getAllFileInfos() const
 
 Strings BackupCoordinationRemote::listFiles(const String & directory, bool recursive) const
 {
-    auto zk = getZooKeeper();
-    Strings escaped_names = zk->getChildren(zookeeper_path + "/file_names");
+    Strings result;
 
-    String prefix = directory;
-    if (!prefix.empty() && !prefix.ends_with('/'))
-        prefix += '/';
-    String terminator = recursive ? "" : "/";
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("listFiles", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            Strings escaped_names = zk->getChildren(zookeeper_path + "/file_names");
 
-    Strings elements;
-    std::unordered_set<std::string_view> unique_elements;
+            String prefix = directory;
+            if (!prefix.empty() && !prefix.ends_with('/'))
+                prefix += '/';
+            String terminator = recursive ? "" : "/";
 
-    for (const String & escaped_name : escaped_names)
-    {
-        String name = unescapeForFileName(escaped_name);
-        if (!name.starts_with(prefix))
-            continue;
-        size_t start_pos = prefix.length();
-        size_t end_pos = String::npos;
-        if (!terminator.empty())
-            end_pos = name.find(terminator, start_pos);
-        std::string_view new_element = std::string_view{name}.substr(start_pos, end_pos - start_pos);
-        if (unique_elements.contains(new_element))
-            continue;
-        elements.push_back(String{new_element});
-        unique_elements.emplace(new_element);
-    }
+            Strings elements;
+            std::unordered_set<std::string_view> unique_elements;
 
-    ::sort(elements.begin(), elements.end());
-    return elements;
+            for (const String & escaped_name : escaped_names)
+            {
+                String name = unescapeForFileName(escaped_name);
+                if (!name.starts_with(prefix))
+                    continue;
+                size_t start_pos = prefix.length();
+                size_t end_pos = String::npos;
+                if (!terminator.empty())
+                    end_pos = name.find(terminator, start_pos);
+                std::string_view new_element = std::string_view{name}.substr(start_pos, end_pos - start_pos);
+                if (unique_elements.contains(new_element))
+                    continue;
+                elements.push_back(String{new_element});
+                unique_elements.emplace(new_element);
+            }
+
+            ::sort(elements.begin(), elements.end());
+            result = std::move(elements);
+        });
+
+    return result;
 }
 
 bool BackupCoordinationRemote::hasFiles(const String & directory) const
 {
-    auto zk = getZooKeeper();
-    Strings escaped_names = zk->getChildren(zookeeper_path + "/file_names");
+    bool result = false;
 
-    String prefix = directory;
-    if (!prefix.empty() && !prefix.ends_with('/'))
-        prefix += '/';
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("hasFiles", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            Strings escaped_names = zk->getChildren(zookeeper_path + "/file_names");
 
-    for (const String & escaped_name : escaped_names)
-    {
-        String name = unescapeForFileName(escaped_name);
-        if (name.starts_with(prefix))
-            return true;
-    }
+            String prefix = directory;
+            if (!prefix.empty() && !prefix.ends_with('/'))
+                prefix += '/';
 
-    return false;
+            for (const String & escaped_name : escaped_names)
+            {
+                String name = unescapeForFileName(escaped_name);
+                if (name.starts_with(prefix))
+                {
+                    result = true;
+                    return;
+                }
+            }
+
+            result = false;
+        });
+
+    return result;
 }
 
 std::optional<FileInfo> BackupCoordinationRemote::getFileInfo(const String & file_name) const
 {
-    auto zk = getZooKeeper();
-    String size_and_checksum;
-    if (!zk->tryGet(zookeeper_path + "/file_names/" + escapeForFileName(file_name), size_and_checksum))
-        return std::nullopt;
-    UInt64 size = deserializeSizeAndChecksum(size_and_checksum).first;
-    FileInfo file_info;
-    if (size) /// we don't keep FileInfos for empty files
-        file_info = deserializeFileInfo(zk->get(zookeeper_path + "/file_infos/" + size_and_checksum));
-    file_info.file_name = file_name;
-    return file_info;
+    std::optional<FileInfo> result;
+
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("getFileInfo", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String size_and_checksum;
+            if (!zk->tryGet(zookeeper_path + "/file_names/" + escapeForFileName(file_name), size_and_checksum))
+            {
+                result = std::nullopt;
+                return;
+            }
+            UInt64 size = deserializeSizeAndChecksum(size_and_checksum).first;
+            FileInfo file_info;
+            if (size) /// we don't keep FileInfos for empty files
+                file_info = deserializeFileInfo(zk->get(zookeeper_path + "/file_infos/" + size_and_checksum));
+            file_info.file_name = file_name;
+            result = std::move(file_info);
+        });
+
+    return result;
 }
 
 std::optional<FileInfo> BackupCoordinationRemote::getFileInfo(const SizeAndChecksum & size_and_checksum) const
 {
-    auto zk = getZooKeeper();
-    String file_info_str;
-    if (!zk->tryGet(zookeeper_path + "/file_infos/" + serializeSizeAndChecksum(size_and_checksum), file_info_str))
-        return std::nullopt;
-    return deserializeFileInfo(file_info_str);
+    std::optional<FileInfo> result;
+
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("getFileInfo", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String file_info_str;
+            if (!zk->tryGet(zookeeper_path + "/file_infos/" + serializeSizeAndChecksum(size_and_checksum), file_info_str))
+            {
+                result = std::nullopt;
+                return;
+            }
+            result = deserializeFileInfo(file_info_str);
+        });
+
+    return result;
 }
 
 String BackupCoordinationRemote::getNextArchiveSuffix()
 {
-    auto zk = getZooKeeper();
-    String path = zookeeper_path + "/archive_suffixes/a";
-    String path_created;
-    auto code = zk->tryCreate(path, "", zkutil::CreateMode::PersistentSequential, path_created);
-    if (code != Coordination::Error::ZOK)
-        throw zkutil::KeeperException(code, path);
-    return formatArchiveSuffix(extractCounterFromSequentialNodeName(path_created));
+    String result;
+
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("getNextArchiveSuffix", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            String path = zookeeper_path + "/archive_suffixes/a";
+            String path_created;
+            auto code = zk->tryCreate(path, "", zkutil::CreateMode::PersistentSequential, path_created);
+            if (code != Coordination::Error::ZOK)
+                throw zkutil::KeeperException(code, path);
+            result = formatArchiveSuffix(extractCounterFromSequentialNodeName(path_created));
+        });
+
+    return result;
 }
 
 Strings BackupCoordinationRemote::getAllArchiveSuffixes() const
 {
-    auto zk = getZooKeeper();
-    Strings node_names = zk->getChildren(zookeeper_path + "/archive_suffixes");
-    for (auto & node_name : node_names)
-        node_name = formatArchiveSuffix(extractCounterFromSequentialNodeName(node_name));
-    return node_names;
+    Strings result;
+
+    auto zookeeper_retries_info = global_zookeeper_retries_info;
+    ZooKeeperRetriesControl retries_ctl("getAllArchiveSuffixes", zookeeper_retries_info);
+    retries_ctl.retryLoop(
+        [&]()
+        {
+            auto zk = getZooKeeper();
+            Strings node_names = zk->getChildren(zookeeper_path + "/archive_suffixes");
+            for (auto & node_name : node_names)
+                node_name = formatArchiveSuffix(extractCounterFromSequentialNodeName(node_name));
+            result = std::move(node_names);
+        });
+
+    return result;
 }
 
 bool BackupCoordinationRemote::hasConcurrentBackups(const std::atomic<size_t> &) const
@@ -766,6 +915,5 @@ bool BackupCoordinationRemote::hasConcurrentBackups(const std::atomic<size_t> &)
 
     return false;
 }
-
 
 }

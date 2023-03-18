@@ -1,8 +1,8 @@
+#include <Backups/BackupCoordinationRemote.h>
+#include <Backups/BackupCoordinationStage.h>
 #include <Backups/RestoreCoordinationRemote.h>
 #include <Common/ZooKeeper/KeeperException.h>
 #include <Common/escapeForFileName.h>
-#include <Backups/BackupCoordinationStage.h>
-#include <Backups/BackupCoordinationRemote.h>
 
 namespace DB
 {
@@ -10,9 +10,13 @@ namespace DB
 namespace Stage = BackupCoordinationStage;
 
 RestoreCoordinationRemote::RestoreCoordinationRemote(
-    const String & root_zookeeper_path_, const String & restore_uuid_, zkutil::GetZooKeeper get_zookeeper_, bool is_internal_)
+    BackupCoordinationStageSync::CoordinationSettings settings,
+    const String & root_zookeeper_path_,
+    const String & restore_uuid_,
+    zkutil::GetZooKeeper get_zookeeper_,
+    bool is_internal_)
     : root_zookeeper_path(root_zookeeper_path_)
-    , zookeeper_path(root_zookeeper_path_ + "/restore-" + restore_uuid_)
+    , zookeeper_path(root_zookeeper_path + "/restore-" + restore_uuid_)
     , restore_uuid(restore_uuid_)
     , get_zookeeper(get_zookeeper_)
     , is_internal(is_internal_)
@@ -20,7 +24,7 @@ RestoreCoordinationRemote::RestoreCoordinationRemote(
     createRootNodes();
 
     stage_sync.emplace(
-        zookeeper_path + "/stage", [this] { return getZooKeeper(); }, &Poco::Logger::get("RestoreCoordination"));
+        zookeeper_path, settings, [this] { return getZooKeeper(); }, &Poco::Logger::get("RestoreCoordination"));
 }
 
 RestoreCoordinationRemote::~RestoreCoordinationRemote()

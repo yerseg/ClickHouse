@@ -17,17 +17,12 @@ constexpr size_t MAX_ZOOKEEPER_ATTEMPTS = 10;
 class BackupCoordinationRemote : public IBackupCoordination
 {
 public:
-    struct BackupKeeperSettings
-    {
-        UInt64 keeper_max_retries;
-        UInt64 keeper_retry_initial_backoff_ms;
-        UInt64 keeper_retry_max_backoff_ms;
-        UInt64 batch_size_for_keeper_multiread;
-    };
+    using CoordinationSettings = BackupCoordinationStageSync::CoordinationSettings;
 
     BackupCoordinationRemote(
-        const BackupKeeperSettings & keeper_settings_,
+        const CoordinationSettings & keeper_settings_,
         const String & root_zookeeper_path_,
+        const String & current_host_,
         const String & backup_uuid_,
         zkutil::GetZooKeeper get_zookeeper_,
         bool is_internal_);
@@ -82,14 +77,15 @@ private:
     void prepareReplicatedTables() const;
     void prepareReplicatedAccess() const;
 
-    const BackupKeeperSettings keeper_settings;
+    const CoordinationSettings keeper_settings;
+    const String backup_uuid;
     const String root_zookeeper_path;
     const String zookeeper_path;
-    const String backup_uuid;
+    const String current_host;
     const zkutil::GetZooKeeper get_zookeeper;
     const bool is_internal;
 
-    mutable ZooKeeperRetriesInfo zookeeper_retries_info;
+    ZooKeeperRetriesInfo global_zookeeper_retries_info;
     std::optional<BackupCoordinationStageSync> stage_sync;
 
     mutable std::mutex mutex;

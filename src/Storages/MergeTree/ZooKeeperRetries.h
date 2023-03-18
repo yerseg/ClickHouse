@@ -162,6 +162,7 @@ private:
 
         if (unconditional_retry)
         {
+            ++retries_info.retry_count;
             unconditional_retry = false;
             return true;
         }
