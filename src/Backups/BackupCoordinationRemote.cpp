@@ -512,8 +512,6 @@ void BackupCoordinationRemote::prepareReplicatedAccess() const
         });
 }
 
-<<<<<<< HEAD
-=======
 void BackupCoordinationRemote::addReplicatedSQLObjectsDir(const String & loader_zk_path, UserDefinedSQLObjectType object_type, const String & host_id, const String & dir_path)
 {
     {
@@ -572,8 +570,6 @@ void BackupCoordinationRemote::prepareReplicatedSQLObjects() const
     }
 }
 
-
->>>>>>> 85641a1bf874103f56d54407371354eda6472321
 void BackupCoordinationRemote::addFileInfo(const FileInfo & file_info, bool & is_data_file_required)
 {
     auto zookeeper_retries_info = global_zookeeper_retries_info;
