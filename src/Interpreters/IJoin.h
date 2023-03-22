@@ -25,6 +25,11 @@ class IJoin;
 using JoinPtr = std::shared_ptr<IJoin>;
 
 
+namespace ErrorCodes
+{
+    extern const int NOT_IMPLEMENTED;
+}
+
 enum class JoinPipelineType
 {
     /*
