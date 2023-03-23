@@ -97,7 +97,7 @@ ENV PATH="$PATH:/usr/local/go/bin"
 ENV GOPATH=/workdir/go
 ENV GOCACHE=/workdir/
 
-ARG CLANG_TIDY_SHA1=03644275e794b0587849bfc2ec6123d5ae0bdb1c
+ARG CLANG_TIDY_SHA1=08a655c4e3e7943ab0a4d5f715b9b6ac6ad4689e
 RUN curl -Lo /usr/bin/clang-tidy-cache \
         "https://raw.githubusercontent.com/matus-chochlik/ctcache/$CLANG_TIDY_SHA1/clang-tidy-cache" \
     && chmod +x /usr/bin/clang-tidy-cache
