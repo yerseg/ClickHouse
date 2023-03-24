@@ -830,7 +830,7 @@ public:
     }
 };
 
-class RangedReadWriteBufferFromHTTPFactory : public ParallelReadBuffer::ReadBufferFactory, public WithFileName
+class RangedReadWriteBufferFromHTTPFactory : public SeekableReadBufferFactory, public WithFileName
 {
     using OutStreamCallback = ReadWriteBufferFromHTTP::OutStreamCallback;
 
